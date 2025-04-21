@@ -10,35 +10,27 @@ import random
 from collections import defaultdict
 
 st.set_page_config(layout="wide")
-st.title("📐 Draw & Fill Shapes with Blocks + Adjacencies")
+st.title("\ud83d\udcc0 Draw & Fill Shapes with Blocks + Adjacencies")
 
 # Initialize session state
-if "points" not in st.session_state:
-    st.session_state.points = []
-if "grid" not in st.session_state:
-    st.session_state.grid = None
-if "area" not in st.session_state:
-    st.session_state.area = None
-if "is_closed" not in st.session_state:
-    st.session_state.is_closed = False
-if "blocks" not in st.session_state:
-    st.session_state.blocks = []
-if "solution_grid" not in st.session_state:
-    st.session_state.solution_grid = None
-if "solution_found" not in st.session_state:
-    st.session_state.solution_found = False
-if "placed_blocks" not in st.session_state:
-    st.session_state.placed_blocks = []
-if "adjacencies" not in st.session_state:
-    st.session_state.adjacencies = []  # List of (block1_id, block2_id) tuples
-if "adjacency_count" not in st.session_state:
-    st.session_state.adjacency_count = 0  # Total adjacencies in the solution
+for key, default in {
+    "points": [],
+    "grid": None,
+    "area": None,
+    "is_closed": False,
+    "blocks": [],
+    "solution_grid": None,
+    "solution_found": False,
+    "placed_blocks": [],
+    "adjacencies": [],
+    "adjacency_count": 0,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-# Grid settings
 GRID_SIZE = 10
 
 
-# Shoelace area formula
 def compute_area(points):
     if len(points) < 3:
         return 0
@@ -49,24 +41,109 @@ def compute_area(points):
     return 0.5 * abs(sum(x[i] * y[i + 1] - x[i + 1] * y[i] for i in range(len(points))))
 
 
-# Create a grid representation of the shape
 def create_grid_from_shape(points, grid_size):
-    # Create a grid filled with zeros
     grid = [[0 for _ in range(grid_size + 1)] for _ in range(grid_size + 1)]
-
-    # Fill the grid with 1s for cells inside the polygon
     if len(points) >= 3:
-        # Create a polygon path
         path = Path(points)
-
-        # Check each cell if it's inside the polygon
         for i in range(grid_size + 1):
             for j in range(grid_size + 1):
-                # Use the center of the cell for more accurate containment check
                 if path.contains_point((j + 0.5, i + 0.5)):
                     grid[grid_size - i][j] = 1
-
     return grid
+
+
+# UI SECTION
+draw_col, visual_col = st.columns([1, 2])
+
+with draw_col:
+    st.subheader("1. Draw Your Shape")
+    x = st.number_input("X coordinate", 0, GRID_SIZE, step=1, key="x_coord")
+    y = st.number_input("Y coordinate", 0, GRID_SIZE, step=1, key="y_coord")
+
+    if st.button("Add Point"):
+        if [x, y] not in st.session_state.points:
+            if len(st.session_state.points) > 0:
+                lx, ly = st.session_state.points[-1]
+                if (x == lx or y == ly) and (x != lx or y != ly):
+                    st.session_state.points.append([x, y])
+                else:
+                    st.warning("Only horizontal or vertical lines are allowed.")
+            else:
+                st.session_state.points.append([x, y])
+
+    if st.button("Undo Last Point"):
+        if st.session_state.points:
+            removed = st.session_state.points.pop()
+            st.success(f"Removed last point: {removed}")
+            st.session_state.is_closed = False
+            st.session_state.grid = None
+            st.session_state.area = None
+            st.rerun()
+
+    if len(st.session_state.points) >= 3:
+        fx, fy = st.session_state.points[0]
+        lx, ly = st.session_state.points[-1]
+        if (
+            (fx == lx or fy == ly)
+            and (fx != lx or fy != ly)
+            and not st.session_state.is_closed
+        ):
+            if st.button("Close Shape"):
+                st.session_state.points.append([fx, fy])
+                st.session_state.is_closed = True
+                st.session_state.area = compute_area(st.session_state.points[:-1])
+                st.session_state.grid = create_grid_from_shape(
+                    st.session_state.points, GRID_SIZE
+                )
+
+    if st.session_state.points:
+        df = pd.DataFrame(st.session_state.points, columns=["X", "Y"])
+        df.index = np.arange(1, len(df) + 1)
+        st.dataframe(df)
+
+    if st.session_state.is_closed and st.session_state.area:
+        st.success(
+            f"\u2705 Closed figure detected — Area: **{st.session_state.area:.2f}** square units"
+        )
+
+    if st.session_state.is_closed:
+        st.subheader("2. Add Blocks to Fill the Shape")
+        col_len, col_width = st.columns(2)
+        with col_len:
+            blen = st.number_input("Length", 1, GRID_SIZE, value=1)
+        with col_width:
+            bwidth = st.number_input("Width", 1, GRID_SIZE, value=1)
+
+        if st.button("Add Block"):
+            block = [[1 for _ in range(bwidth)] for _ in range(blen)]
+            st.session_state.blocks.append(block)
+            st.success(f"Added block with dimensions {blen} x {bwidth}")
+
+        if st.session_state.blocks:
+            st.subheader("\ud83d\udce6 Your Blocks")
+            for i, b in enumerate(st.session_state.blocks):
+                st.write(f"Block {i+1}: {len(b)} x {len(b[0])}")
+
+            if st.button("Clear All Blocks"):
+                st.session_state.blocks = []
+                st.session_state.placed_blocks = []
+                st.session_state.solution_grid = None
+                st.session_state.solution_found = False
+                st.success("All blocks cleared")
+                st.rerun()
+
+            with st.expander("\ud83d\uddd1\ufe0f Delete Block"):
+                options = list(range(1, len(st.session_state.blocks) + 1))
+                selected_block = st.selectbox(
+                    "Select block to delete",
+                    options,
+                    format_func=lambda x: f"Block {x}",
+                    key="delete_block_select",
+                )
+                if st.button("Delete Selected Block"):
+                    del st.session_state.blocks[selected_block - 1]
+                    st.success(f"Deleted Block {selected_block}")
+                    st.rerun()
 
 
 # Block placement functions
