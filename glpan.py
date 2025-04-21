@@ -624,6 +624,15 @@ with col1:
             else:
                 # First point can be added anywhere
                 st.session_state.points.append([x, y])
+    if st.button("Undo Last Point"):
+        if st.session_state.points:
+            removed = st.session_state.points.pop()
+            st.success(f"Removed last point: {removed}")
+            # Reset closing state and grid if undoing after closing
+            st.session_state.is_closed = False
+            st.session_state.grid = None
+            st.session_state.area = None
+            st.rerun()
 
     # Check if shape can be closed
     if len(st.session_state.points) >= 3:
@@ -722,6 +731,20 @@ with col1:
                 st.session_state.solution_found = False
                 st.success("All blocks cleared")
                 st.rerun()
+
+            # Delete specific block logic
+            with st.expander("🗑️ Delete Block"):
+                block_options = list(range(1, len(st.session_state.blocks) + 1))
+                selected_block_to_delete = st.selectbox(
+                    "Select block to delete",
+                    options=block_options,
+                    format_func=lambda x: f"Block {x}",
+                    key="delete_block_select",
+                )
+                if st.button("Delete Selected Block"):
+                    del st.session_state.blocks[selected_block_to_delete - 1]
+                    st.success(f"Deleted Block {selected_block_to_delete}")
+                    st.rerun()
 
         # Adjacency constraints section
         if len(st.session_state.blocks) >= 2:
