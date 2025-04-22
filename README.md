@@ -26,3 +26,4 @@
    - Define adjacency constraints.
    - Solve to optimally place blocks within the defined shape.
 
+The core algorithms use backtracking with optimization techniques to efficiently place blocks. The solver prioritizes larger blocks and corner/edge positions first. It performs early constraint checking to prune invalid paths quickly and uses a two-phase approach that combines thorough searching with time-aware optimization. The system tracks block adjacencies, ensuring required blocks touch while maximizing total adjacencies when requested
