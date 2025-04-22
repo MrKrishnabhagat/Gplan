@@ -1,11 +1,10 @@
 
-Gplan is an intelligent floorplanning solution designed for optimal layout planning using a Streamlit interface.
 
 ### ✅ Setup Instructions
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/MrKrishnabhagat/Gplan.git
+   git clone https://github.com/MrKrishnabhagat/updated.git
    cd Gplan
    ```
 
