@@ -17,7 +17,7 @@
 3. **Launch the App**
    Use Streamlit to run the app:
    ```bash
-   streamlit run gplan.py
+   streamlit run updated.py
    ```
 
 4. **Start Building**
