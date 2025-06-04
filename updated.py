@@ -11,7 +11,7 @@ import time
 from collections import defaultdict
 
 st.set_page_config(layout="wide")
-st.title("📐 Draw & Fill Shapes with Blocks + Adjacencies")
+st.title("🏠 Housing Floor Planner")
 
 # Initialize session state
 if "points" not in st.session_state:
@@ -24,6 +24,8 @@ if "is_closed" not in st.session_state:
     st.session_state.is_closed = False
 if "blocks" not in st.session_state:
     st.session_state.blocks = []
+if "block_types" not in st.session_state:
+    st.session_state.block_types = []
 if "solution_grid" not in st.session_state:
     st.session_state.solution_grid = None
 if "solution_found" not in st.session_state:
@@ -31,13 +33,20 @@ if "solution_found" not in st.session_state:
 if "placed_blocks" not in st.session_state:
     st.session_state.placed_blocks = []
 if "adjacencies" not in st.session_state:
-    st.session_state.adjacencies = []  # List of (block1_id, block2_id) tuples
+    st.session_state.adjacencies = []
 if "adjacency_count" not in st.session_state:
-    st.session_state.adjacency_count = 0  # Total adjacencies in the solution
+    st.session_state.adjacency_count = 0
 
 # Grid settings
-GRID_SIZE = 10
+GRID_SIZE = 20
 
+# Room type definitions with minimum dimensions and labels
+ROOM_TYPES = {
+    "Bedroom": {"min_length": 3, "min_width": 3, "color": "#FFB6C1", "shapes": ["rectangle"], "label": "Bd"},
+    "Bathroom": {"min_length": 2, "min_width": 2, "color": "#87CEEB", "shapes": ["rectangle"], "label": "Bt"},
+    "Living Room": {"min_length": 4, "min_width": 4, "color": "#98FB98", "shapes": ["rectangle", "L-shaped", "T-shaped"], "label": "LR"},
+    "Kitchen": {"min_length": 3, "min_width": 2, "color": "#F0E68C", "shapes": ["rectangle"], "label": "K"}
+}
 
 # Shoelace area formula
 def compute_area(points):
@@ -49,98 +58,157 @@ def compute_area(points):
     y.append(points[0][1])
     return 0.5 * abs(sum(x[i] * y[i + 1] - x[i + 1] * y[i] for i in range(len(points))))
 
+# Create special shaped blocks
+def create_l_shaped_block(length, width):
+    """Create an L-shaped block with given dimensions"""
+    if length < 3 or width < 3:
+        return None
+    
+    block = [[1 for _ in range(width)] for _ in range(length)]
+    corner_height = length // 2
+    corner_width = width // 2
+    
+    for i in range(corner_height):
+        for j in range(width - corner_width, width):
+            block[i][j] = 0
+    
+    return block
+
+def create_t_shaped_block(length, width):
+    """Create a T-shaped block with given dimensions"""
+    if length < 3 or width < 3:
+        return None
+    
+    block = [[0 for _ in range(width)] for _ in range(length)]
+    top_height = length // 3
+    
+    for i in range(top_height):
+        for j in range(width):
+            block[i][j] = 1
+    
+    stem_start = width // 3
+    stem_end = 2 * width // 3
+    for i in range(top_height, length):
+        for j in range(stem_start, stem_end):
+            block[i][j] = 1
+    
+    return block
+
+def create_room_block(room_type, length, width, shape="rectangle"):
+    """Create a block based on room type and shape"""
+    if shape == "rectangle":
+        return [[1 for _ in range(width)] for _ in range(length)]
+    elif shape == "L-shaped":
+        return create_l_shaped_block(length, width)
+    elif shape == "T-shaped":
+        return create_t_shaped_block(length, width)
+    else:
+        return [[1 for _ in range(width)] for _ in range(length)]
+
+# Optimized rotation functions
+def rotate_90_clockwise(block):
+    """Rotate block 90 degrees clockwise"""
+    return [list(row) for row in zip(*block[::-1])]
+
+def get_rots_optimized(block):
+    """Get all unique rotations of a block efficiently"""
+    rotations = []
+    current = block
+    seen = set()
+    
+    for _ in range(4):
+        # Convert to tuple for hashing
+        block_tuple = tuple(tuple(row) for row in current)
+        if block_tuple not in seen:
+            seen.add(block_tuple)
+            rotations.append([row[:] for row in current])  # Deep copy
+        current = rotate_90_clockwise(current)
+    
+    return rotations
+
+# Find the center point of a room in the grid
+def find_room_center(grid, room_id):
+    """Find the center point of a room for labeling"""
+    room_cells = []
+    for i in range(len(grid)):
+        for j in range(len(grid[0])):
+            if grid[i][j] == room_id + 2:
+                room_cells.append((i, j))
+    
+    if not room_cells:
+        return None
+    
+    avg_i = sum(cell[0] for cell in room_cells) / len(room_cells)
+    avg_j = sum(cell[1] for cell in room_cells) / len(room_cells)
+    
+    center_i = round(avg_i)
+    center_j = round(avg_j)
+    
+    if (center_i, center_j) in room_cells:
+        return (center_i, center_j)
+    else:
+        min_dist = float('inf')
+        closest_cell = room_cells[0]
+        for cell in room_cells:
+            dist = (cell[0] - avg_i)**2 + (cell[1] - avg_j)**2
+            if dist < min_dist:
+                min_dist = dist
+                closest_cell = cell
+        return closest_cell
 
 # Create a grid representation of the shape
 def create_grid_from_shape(points, grid_size):
-    # Create a grid filled with zeros
     grid = [[0 for _ in range(grid_size + 1)] for _ in range(grid_size + 1)]
 
-    # Fill the grid with 1s for cells inside the polygon
     if len(points) >= 3:
-        # Create a polygon path
         path = Path(points)
-
-        # Check each cell if it's inside the polygon
         for i in range(grid_size + 1):
             for j in range(grid_size + 1):
-                # Use the center of the cell for more accurate containment check
                 if path.contains_point((j + 0.5, i + 0.5)):
                     grid[grid_size - i][j] = 1
 
     return grid
 
-
-# Block placement functions
+# Optimized placement functions
 def can_place(grid, block, row, col):
-    # Check if the block can be placed at the given position
-    for i in range(len(block)):
-        for j in range(len(block[i])):
-            if block[i][j] == 1:
-                # Check if position is within grid bounds
-                if row + i >= len(grid) or col + j >= len(grid[0]):
-                    return False
-                # Check if position is part of the shape (marked as 1)
-                if grid[row + i][col + j] != 1:
-                    return False
+    """Check if block can be placed at position with bounds checking"""
+    block_height = len(block)
+    block_width = len(block[0]) if block_height > 0 else 0
+    
+    # Quick bounds check
+    if row + block_height > len(grid) or col + block_width > len(grid[0]):
+        return False
+    
+    for i in range(block_height):
+        for j in range(block_width):
+            if block[i][j] == 1 and grid[row + i][col + j] != 1:
+                return False
     return True
-
 
 def place(grid, block, row, col, block_id):
     for i in range(len(block)):
         for j in range(len(block[i])):
             if block[i][j] == 1:
-                grid[row + i][col + j] = (
-                    block_id + 2
-                )  # +2 to avoid conflict with shape markers
-
+                grid[row + i][col + j] = block_id + 2
 
 def remove(grid, block, row, col):
     for i in range(len(block)):
         for j in range(len(block[i])):
             if block[i][j] == 1:
-                grid[row + i][col + j] = 1  # Reset to 1 (part of shape)
+                grid[row + i][col + j] = 1
 
-
-def get_rots(block):
-    rotations = []
-    curr_rot = block
-    seen_rots = set()
-
-    # Try all 4 possible rotations
-    for _ in range(4):
-        # Convert to tuple of tuples for hashability
-        rot_tuple = tuple(tuple(row) for row in curr_rot)
-        rot_str = str(rot_tuple)
-
-        if rot_str not in seen_rots:
-            seen_rots.add(rot_str)
-            rotations.append(curr_rot)
-
-        # Rotate 90 degrees clockwise
-        curr_rot = [list(row) for row in zip(*curr_rot[::-1])]
-
-    return rotations
-
-
-# Check if two blocks are adjacent in the grid
 def are_adjacent(grid, block1_id, block2_id):
     for i in range(len(grid)):
         for j in range(len(grid[0])):
-            if grid[i][j] == block1_id + 2:  # First block found
-                # Check all 4 directions
+            if grid[i][j] == block1_id + 2:
                 directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
                 for di, dj in directions:
                     ni, nj = i + di, j + dj
-                    if (
-                        0 <= ni < len(grid)
-                        and 0 <= nj < len(grid[0])
-                        and grid[ni][nj] == block2_id + 2
-                    ):
+                    if (0 <= ni < len(grid) and 0 <= nj < len(grid[0]) and 
+                        grid[ni][nj] == block2_id + 2):
                         return True
     return False
 
-
-# Count total adjacencies in the solution
 def count_adjacencies(grid, block_count):
     adjacency_count = 0
     for block1_id in range(block_count):
@@ -149,249 +217,126 @@ def count_adjacencies(grid, block_count):
                 adjacency_count += 1
     return adjacency_count
 
-
-# Check if all required adjacencies are satisfied
 def check_adjacency_constraints(grid, adjacencies):
     for block1_id, block2_id in adjacencies:
         if not are_adjacent(grid, block1_id, block2_id):
             return False
     return True
 
-
-# Calculate total cell count in a block
 def block_cell_count(block):
     return sum(sum(row) for row in block)
 
-
-# IMPROVEMENT 1: Priority-based block selection
-def get_block_placement_order(blocks, adjacencies):
-    block_scores = []
-    for idx, block in enumerate(blocks):
-        area = block_cell_count(block)
-        constraint_count = sum(1 for adj in adjacencies if idx in adj)
-        block_scores.append((idx, area, constraint_count))
-    
-    # Sort by area (descending) and constraint count (descending)
-    return [idx for idx, _, _ in sorted(block_scores, key=lambda x: (x[1], x[2]), reverse=True)]
-
-
-# IMPROVEMENT 2: Smarter position selection
-def get_priority_positions(grid):
-    positions = []
-    corners = []
-    edges = []
-    interior = []
-    
-    # Identify corners, edges, and interior cells
-    for row in range(len(grid)):
-        for col in range(len(grid[0])):
-            if grid[row][col] == 1:  # Part of shape
-                neighbors = sum(1 for dr, dc in [(0,1), (1,0), (0,-1), (-1,0)] 
-                               if 0 <= row+dr < len(grid) and 0 <= col+dc < len(grid[0]) 
-                               and grid[row+dr][col+dc] == 1)
-                if neighbors <= 2:
-                    corners.append((row, col))
-                elif neighbors == 3:
-                    edges.append((row, col))
-                else:
-                    interior.append((row, col))
-    
-    # Return positions in priority order: corners, edges, then interior
-    return corners + edges + interior
-
-
-# IMPROVEMENT 4: Early constraint checking
-def is_solution_possible(grid, blocks, adjacencies, placed_blocks):
-    # Create a map of placed block IDs
-    placed_block_ids = {block_id for block_id, _, _, _, _ in placed_blocks}
-    
-    # Check already placed blocks for adjacency violations
-    for b1, b2 in adjacencies:
-        # If both blocks are placed but not adjacent, this is invalid
-        if b1 in placed_block_ids and b2 in placed_block_ids and not are_adjacent(grid, b1, b2):
-            return False
-    return True
-
-
-# IMPROVEMENT 3: Backtracking with pruning
-def solve_with_backtracking(grid, blocks, adjacencies, time_limit=10):
+# Optimized solving algorithm
+def solve_with_optimized_algorithm(grid, blocks, adjacencies, time_limit=15):
+    """Optimized solver with better performance"""
     start_time = time.time()
-    solution = []
-    block_order = get_block_placement_order(blocks, adjacencies)
-    grid_copy = copy.deepcopy(grid)
+    best_solution = None
+    best_adj_count = -1
     
-    def backtrack(block_index, placed_blocks):
-        # Check time limit
+    # Pre-compute rotations for all blocks
+    block_rotations = [get_rots_optimized(block) for block in blocks]
+    
+    # Prioritize larger blocks first
+    block_order = sorted(range(len(blocks)), 
+                        key=lambda i: block_cell_count(blocks[i]), 
+                        reverse=True)
+    
+    # Get valid positions more efficiently
+    valid_positions = []
+    for i in range(len(grid)):
+        for j in range(len(grid[0])):
+            if grid[i][j] == 1:
+                valid_positions.append((i, j))
+    
+    def backtrack_optimized(block_idx, current_grid, placed_blocks):
+        nonlocal best_solution, best_adj_count
+        
         if time.time() - start_time > time_limit:
             return False
-            
-        if block_index >= len(block_order):
-            # All blocks placed, check constraint satisfaction
-            if check_adjacency_constraints(grid_copy, adjacencies):
+        
+        if block_idx >= len(block_order):
+            if check_adjacency_constraints(current_grid, adjacencies):
+                adj_count = count_adjacencies(current_grid, len(blocks))
+                if adj_count > best_adj_count:
+                    best_adj_count = adj_count
+                    best_solution = (copy.deepcopy(current_grid), placed_blocks[:], adj_count)
                 return True
             return False
-            
-        block_id = block_order[block_index]
-        block = blocks[block_id]
         
-        # Get prioritized positions
-        priority_positions = get_priority_positions(grid_copy)
-        if not priority_positions:  # Fallback to all positions
-            priority_positions = [(row, col) for row in range(len(grid)) for col in range(len(grid[0]))]
+        actual_block_id = block_order[block_idx]
+        rotations = block_rotations[actual_block_id]
         
-        # Try all rotations
-        rotations = get_rots(block)
-        for rot_idx, rot in enumerate(rotations):
-            # Try all positions
-            for row, col in priority_positions:
-                if can_place(grid_copy, rot, row, col):
-                    # Try placing this block
-                    place(grid_copy, rot, row, col, block_id)
-                    placed_blocks.append((block_id, row, col, rot_idx, rot))
+        # Try positions in a more strategic order
+        for row, col in valid_positions:
+            for rot_idx, rotation in enumerate(rotations):
+                if can_place(current_grid, rotation, row, col):
+                    place(current_grid, rotation, row, col, actual_block_id)
+                    placed_blocks.append((actual_block_id, row, col, rot_idx, rotation))
                     
-                    # Check if adjacency constraints are still satisfiable
-                    if is_solution_possible(grid_copy, blocks, adjacencies, placed_blocks):
-                        # Recurse to next block
-                        if backtrack(block_index + 1, placed_blocks):
+                    if backtrack_optimized(block_idx + 1, current_grid, placed_blocks):
+                        if not adjacencies:  # If maximizing, continue searching
+                            pass
+                        else:  # If satisfying constraints, can return early
                             return True
                     
-                    # If we get here, this placement didn't work
-                    remove(grid_copy, rot, row, col)
+                    remove(current_grid, rotation, row, col)
                     placed_blocks.pop()
         
-        return False  # Couldn't place this block
+        return False
     
-    success = backtrack(0, solution)
-    
-    if success:
-        adj_count = count_adjacencies(grid_copy, len(blocks))
-        return True, solution, grid_copy, adj_count
-    else:
-        return False, [], None, 0
-
-
-# IMPROVEMENT 5: Two-phase strategy with time limit
-def solve_with_improved_algorithm(grid, blocks, adjacencies, maximize_adjacencies=False, time_limit=10):
-    start_time = time.time()
-    
-    # Phase 1: Find a valid solution using backtracking
-    success, placed_blocks, solution_grid, adj_count = solve_with_backtracking(
-        grid, blocks, adjacencies, time_limit=time_limit/2
-    )
-    
-    if not success:
-        # Try a simpler approach if backtracking fails
-        success, placed_blocks, solution_grid, adj_count = solve_with_adjacencies_legacy(
-            grid, blocks, adjacencies, time_limit=time_limit/2
-        )
-    
-    if not success:
-        return False, [], None, 0
-    
-    # Phase 2: If maximizing adjacencies and time remains, try multiple solutions
-    if maximize_adjacencies and time.time() - start_time < time_limit:
-        remaining_time = time_limit - (time.time() - start_time)
-        # max_attempts = min(100, int(remaining_time * 10))  # Scale attempts based on remaining time
-        max_attempts =  int(remaining_time * 10)
-        
-        best_solution = (solution_grid, placed_blocks, adj_count)
-        
-        for _ in range(max_attempts):
-            # Try another solution with different random seeds
-            success, new_placed, new_grid, new_adj = solve_with_backtracking(
-                grid, blocks, adjacencies, time_limit=remaining_time/max_attempts
-            )
+    # Try multiple attempts with different strategies
+    max_attempts = 5 if adjacencies else 10
+    for attempt in range(max_attempts):
+        if time.time() - start_time > time_limit:
+            break
             
-            if success and new_adj > best_solution[2]:
-                best_solution = (new_grid, new_placed, new_adj)
+        grid_copy = copy.deepcopy(grid)
+        placed_blocks = []
         
-        return True, best_solution[1], best_solution[0], best_solution[2]
+        # Randomize position order for variety
+        if attempt > 0:
+            random.shuffle(valid_positions)
+        
+        backtrack_optimized(0, grid_copy, placed_blocks)
     
-    return True, placed_blocks, solution_grid, adj_count
-
-
-# Legacy solver for backward compatibility
-def solve_with_adjacencies_legacy(grid, blocks, adjacencies, time_limit=5):
-    best_solution = None
-    best_adjacency_count = -1
-    start_time = time.time()
-    attempts = 0
-    max_attempts = 100000  # Limit search to avoid long wait times
-
-    while attempts < max_attempts and time.time() - start_time < time_limit:
-        attempts += 1
-        # Make a deep copy of the grid for this attempt
-        curr_grid = copy.deepcopy(grid)
-        used_blocks = []
-        placed_block_info = []
-
-        # Try placing each block in a smart order
-        block_indices = get_block_placement_order(blocks, adjacencies)
-
-        all_placed = True
-        for block_idx in block_indices:
-            block = blocks[block_idx]
-            block_placed = False
-
-            # Try all possible rotations
-            rotations = get_rots(block)
-            rot_indices = list(range(len(rotations)))
-            random.shuffle(rot_indices)
-
-            for rot_idx in rot_indices:
-                rot = rotations[rot_idx]
-
-                # Try positions in priority order
-                positions = get_priority_positions(curr_grid)
-                if not positions:  # Fallback to all positions
-                    positions = [(row, col) for row in range(len(grid)) for col in range(len(grid[0]))]
-                    random.shuffle(positions)
-
-                for row, col in positions:
-                    if can_place(curr_grid, rot, row, col):
-                        # Place this block
-                        place(curr_grid, rot, row, col, block_idx)
-                        used_blocks.append(block_idx)
-                        placed_block_info.append((block_idx, row, col, rot_idx, rot))
-                        block_placed = True
-                        break
-
-                if block_placed:
-                    break
-
-            if not block_placed:
-                all_placed = False
-                break
-
-        if all_placed:
-            # Check if adjacency constraints are satisfied
-            constraints_satisfied = check_adjacency_constraints(curr_grid, adjacencies)
-
-            if constraints_satisfied:
-                # Count total adjacencies for optimization
-                adj_count = count_adjacencies(curr_grid, len(blocks))
-
-                if adj_count > best_adjacency_count:
-                    best_adjacency_count = adj_count
-                    best_solution = (curr_grid, placed_block_info, adj_count)
-
-                    # If not maximizing adjacencies, return the first valid solution
-                    if not adjacencies:  # If no adjacency constraints, any solution is fine
-                        return True, placed_block_info, curr_grid, adj_count
-
-    # Return the best solution found, if any
     if best_solution:
         return True, best_solution[1], best_solution[0], best_solution[2]
     else:
         return False, [], None, 0
 
+# Room removal function
+def remove_room(room_index):
+    """Remove a room and update adjacencies"""
+    if 0 <= room_index < len(st.session_state.blocks):
+        # Remove the room
+        st.session_state.blocks.pop(room_index)
+        st.session_state.block_types.pop(room_index)
+        
+        # Update adjacencies - remove any adjacency involving this room
+        # and adjust indices for rooms that come after
+        new_adjacencies = []
+        for adj in st.session_state.adjacencies:
+            room1, room2 = adj
+            if room1 != room_index and room2 != room_index:
+                # Adjust indices for rooms after the removed room
+                new_room1 = room1 if room1 < room_index else room1 - 1
+                new_room2 = room2 if room2 < room_index else room2 - 1
+                new_adjacencies.append((min(new_room1, new_room2), max(new_room1, new_room2)))
+        
+        st.session_state.adjacencies = new_adjacencies
+        
+        # Clear solution
+        st.session_state.solution_found = False
+        st.session_state.solution_grid = None
+        st.session_state.placed_blocks = []
+        st.session_state.adjacency_count = 0
 
 # Main layout
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    st.subheader("1. Draw Your Shape")
-    st.write("Enter coordinates to draw a shape (x, y):")
+    st.subheader("1. Draw Your House Shape")
+    st.write("Enter coordinates to draw the house outline (x, y):")
 
     # Point input
     x = st.number_input(
@@ -403,18 +348,14 @@ with col1:
 
     # Add point button
     if st.button("Add Point"):
-        # Check if the point already exists
         if [x, y] not in st.session_state.points:
-            # If there's at least one point, check if we're creating valid horizontal/vertical lines
             if len(st.session_state.points) > 0:
                 last_x, last_y = st.session_state.points[-1]
-                # Only allow horizontal or vertical lines
                 if (x == last_x or y == last_y) and (x != last_x or y != last_y):
                     st.session_state.points.append([x, y])
                 else:
                     st.warning("Only horizontal or vertical lines are allowed.")
             else:
-                # First point can be added anywhere
                 st.session_state.points.append([x, y])
 
     # Check if shape can be closed
@@ -422,109 +363,161 @@ with col1:
         first_x, first_y = st.session_state.points[0]
         last_x, last_y = st.session_state.points[-1]
 
-        # Enable closing if we can make a vertical or horizontal line back to start
         can_close = (first_x == last_x or first_y == last_y) and (
             first_x != last_x or first_y != last_y
         )
 
-        # Show close shape button only if not already closed
         if not st.session_state.is_closed:
             close_button = st.button("Close Shape", disabled=not can_close)
             if close_button and can_close:
-                st.session_state.points.append(
-                    [first_x, first_y]
-                )  # Add first point to close
+                st.session_state.points.append([first_x, first_y])
                 st.session_state.is_closed = True
-                # Calculate area
-                st.session_state.area = compute_area(
-                    st.session_state.points[:-1]
-                )  # Exclude last point for calculation
-
-                # Create grid representation
-                st.session_state.grid = create_grid_from_shape(
-                    st.session_state.points, GRID_SIZE
-                )
+                st.session_state.area = compute_area(st.session_state.points[:-1])
+                st.session_state.grid = create_grid_from_shape(st.session_state.points, GRID_SIZE)
 
     # Show points as a table
     if st.session_state.points:
-        st.subheader("📍 Points")
+        st.subheader("📍 House Outline Points")
         df = pd.DataFrame(st.session_state.points, columns=["X", "Y"])
-        df.index = np.arange(1, len(df) + 1)  # Start index from 1
+        df.index = np.arange(1, len(df) + 1)
         st.dataframe(df)
 
     # Display area if shape is closed
     if st.session_state.is_closed and st.session_state.area is not None:
-        st.success(
-            f"✅ Closed figure detected — Area: **{st.session_state.area:.2f} square units**"
+        st.success(f"✅ House outline complete — Area: **{st.session_state.area:.2f} square units**")
+
+    # Room creation section
+    if st.session_state.is_closed:
+        st.subheader("2. Add Rooms to Your House")
+
+        # Room type selection
+        room_type = st.selectbox(
+            "Select Room Type",
+            options=list(ROOM_TYPES.keys()),
+            key="room_type_select"
         )
 
-    # Block creation section
-    if st.session_state.is_closed:
-        st.subheader("2. Add Blocks to Fill the Shape")
+        # Get minimum dimensions for selected room type
+        min_length = ROOM_TYPES[room_type]["min_length"]
+        min_width = ROOM_TYPES[room_type]["min_width"]
+        available_shapes = ROOM_TYPES[room_type]["shapes"]
 
+        # Shape selection (only for living room)
+        if len(available_shapes) > 1:
+            room_shape = st.selectbox(
+                "Select Room Shape",
+                options=available_shapes,
+                key="room_shape_select"
+            )
+        else:
+            room_shape = available_shapes[0]
+
+        # Dimension inputs with minimum constraints
         col_len, col_width = st.columns(2)
         with col_len:
-            block_length = st.number_input(
-                "Length", min_value=1, max_value=GRID_SIZE, value=1
+            room_length = st.number_input(
+                f"Length (min: {min_length})", 
+                min_value=min_length, 
+                max_value=GRID_SIZE, 
+                value=min_length
             )
         with col_width:
-            block_width = st.number_input(
-                "Width", min_value=1, max_value=GRID_SIZE, value=1
+            room_width = st.number_input(
+                f"Width (min: {min_width})", 
+                min_value=min_width, 
+                max_value=GRID_SIZE, 
+                value=min_width
             )
 
-        if st.button("Add Block"):
-            # Create the block as a 2D array of 1s
-            block = [[1 for _ in range(block_width)] for _ in range(block_length)]
-            st.session_state.blocks.append(block)
-            st.success(f"Added block with dimensions {block_length} x {block_width}")
+        # Display room info
+        st.info(f"**{room_type}** - Shape: {room_shape} - Dimensions: {room_length} x {room_width}")
 
-        # List of blocks
+        if st.button("Add Room"):
+            # Create the room block
+            room_block = create_room_block(room_type, room_length, room_width, room_shape)
+            
+            if room_block is not None:
+                st.session_state.blocks.append(room_block)
+                st.session_state.block_types.append({
+                    "type": room_type,
+                    "shape": room_shape,
+                    "dimensions": (room_length, room_width)
+                })
+                st.success(f"Added {room_type} ({room_shape}) with dimensions {room_length} x {room_width}")
+                
+                # Clear solution when adding new room
+                st.session_state.solution_found = False
+                st.session_state.solution_grid = None
+                st.session_state.placed_blocks = []
+                st.session_state.adjacency_count = 0
+            else:
+                st.error("Could not create room with specified dimensions and shape")
+
+        # List of rooms with remove buttons
         if st.session_state.blocks:
-            st.subheader("📦 Your Blocks")
-            for i, block in enumerate(st.session_state.blocks):
-                st.write(f"Block {i+1}: {len(block)} x {len(block[0])}")
+            st.subheader("🏠 Your Rooms")
+            for i, (block, room_info) in enumerate(zip(st.session_state.blocks, st.session_state.block_types)):
+                room_type = room_info["type"]
+                room_shape = room_info["shape"]
+                dimensions = room_info["dimensions"]
+                
+                col_room, col_remove = st.columns([3, 1])
+                with col_room:
+                    st.write(f"**Room {i+1}**: {room_type} ({room_shape}) - {dimensions[0]} x {dimensions[1]}")
+                with col_remove:
+                    if st.button("🗑️", key=f"remove_room_{i}", help=f"Remove {room_type} {i+1}"):
+                        remove_room(i)
+                        st.rerun()
 
         # Adjacency constraints section
         if len(st.session_state.blocks) >= 2:
-            st.subheader("3. Define Block Adjacencies")
+            st.subheader("3. Define Room Adjacencies (Optional)")
+            st.write("⚡ **Auto-maximize**: If no adjacencies are specified, the system will automatically maximize room connections!")
 
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                block1 = st.selectbox(
-                    "Block 1",
-                    options=list(range(1, len(st.session_state.blocks) + 1)),
-                    format_func=lambda x: f"Block {x}",
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                room1_idx = st.selectbox(
+                    "Room 1",
+                    options=list(range(len(st.session_state.blocks))),
+                    format_func=lambda x: f"{st.session_state.block_types[x]['type']} {x+1}",
+                    key="room1_select"
                 )
-            with col_b2:
-                block2 = st.selectbox(
-                    "Block 2",
-                    options=list(range(1, len(st.session_state.blocks) + 1)),
-                    format_func=lambda x: f"Block {x}",
+            with col_r2:
+                room2_idx = st.selectbox(
+                    "Room 2",
+                    options=list(range(len(st.session_state.blocks))),
+                    format_func=lambda x: f"{st.session_state.block_types[x]['type']} {x+1}",
+                    key="room2_select"
                 )
 
-            if st.button("Add Adjacency"):
-                if block1 != block2:
-                    # Convert to 0-indexed
-                    adj = (block1 - 1, block2 - 1)
-                    # Store as tuple with smaller index first for consistency
-                    adj = (min(adj), max(adj))
-
-                    # Check if this adjacency already exists
+            if st.button("Add Room Adjacency"):
+                if room1_idx != room2_idx:
+                    adj = (min(room1_idx, room2_idx), max(room1_idx, room2_idx))
+                    
                     if adj not in st.session_state.adjacencies:
                         st.session_state.adjacencies.append(adj)
-                        st.success(
-                            f"Added adjacency between Block {block1} and Block {block2}"
-                        )
+                        room1_name = f"{st.session_state.block_types[room1_idx]['type']} {room1_idx+1}"
+                        room2_name = f"{st.session_state.block_types[room2_idx]['type']} {room2_idx+1}"
+                        st.success(f"Added adjacency between {room1_name} and {room2_name}")
                     else:
                         st.warning("This adjacency already exists!")
                 else:
-                    st.warning("Cannot add adjacency between the same block!")
+                    st.warning("Cannot add adjacency between the same room!")
 
-            # Show adjacencies list
+            # Show adjacencies list with remove buttons
             if st.session_state.adjacencies:
-                st.subheader("Required Adjacencies:")
-                for b1, b2 in st.session_state.adjacencies:
-                    st.write(f"Block {b1+1} must be adjacent to Block {b2+1}")
+                st.subheader("Required Room Adjacencies:")
+                for idx, (r1, r2) in enumerate(st.session_state.adjacencies):
+                    room1_name = f"{st.session_state.block_types[r1]['type']} {r1+1}"
+                    room2_name = f"{st.session_state.block_types[r2]['type']} {r2+1}"
+                    
+                    col_adj, col_remove_adj = st.columns([4, 1])
+                    with col_adj:
+                        st.write(f"• {room1_name} ↔ {room2_name}")
+                    with col_remove_adj:
+                        if st.button("❌", key=f"remove_adj_{idx}", help="Remove this adjacency"):
+                            st.session_state.adjacencies.pop(idx)
+                            st.rerun()
 
                 if st.button("Clear All Adjacencies"):
                     st.session_state.adjacencies = []
@@ -532,42 +525,34 @@ with col1:
 
         # Solve button
         if st.session_state.blocks:
-            st.subheader("4. Solve and Fill")
+            st.subheader("4. Generate Floor Plan")
 
-            # Calculate total area of blocks
-            total_cells = sum(
-                block_cell_count(block) for block in st.session_state.blocks
-            )
-            shape_area = (
-                st.session_state.area if st.session_state.area is not None else 0
-            )
+            # Calculate total area of rooms
+            total_cells = sum(block_cell_count(block) for block in st.session_state.blocks)
+            house_area = st.session_state.area if st.session_state.area is not None else 0
 
-            # Display block area info
-            st.info(f"Total block area: {total_cells} square units")
-            if total_cells > shape_area:
-                st.warning(
-                    f"Warning: Total block area ({total_cells}) exceeds shape area ({shape_area:.2f})"
-                )
+            # Display room area info
+            st.info(f"Total room area: {total_cells} square units")
+            if total_cells > house_area:
+                st.warning(f"Warning: Total room area ({total_cells}) exceeds house area ({house_area:.2f})")
 
-            col_solve, col_maximize = st.columns(2)
-
-            with col_solve:
-                solve_button = st.button("Satisfy Adjacencies")
-            with col_maximize:
-                maximize_button = st.button("Maximize Adjacencies")
-
-            if solve_button or maximize_button:
-                # Create a copy of the grid for solving
+            # Single solve button that handles both cases
+            if st.button("🚀 Generate Optimized Floor Plan"):
                 if st.session_state.grid:
-                    with st.spinner("Finding solution..."):
-                        success, placed_blocks, solution_grid, adj_count = (
-                            solve_with_improved_algorithm(
-                                st.session_state.grid,
-                                st.session_state.blocks,
-                                st.session_state.adjacencies,
-                                maximize_adjacencies=maximize_button,
-                                time_limit=15  # Increased time limit for better results
-                            )
+                    # Determine if we should maximize adjacencies
+                    maximize_adj = len(st.session_state.adjacencies) == 0
+                    
+                    if maximize_adj:
+                        st.info("🔄 No specific adjacencies defined - automatically maximizing room connections...")
+                    else:
+                        st.info(f"🔄 Generating layout with {len(st.session_state.adjacencies)} required adjacencies...")
+                    
+                    with st.spinner("Generating optimized floor plan..."):
+                        success, placed_blocks, solution_grid, adj_count = solve_with_optimized_algorithm(
+                            st.session_state.grid,
+                            st.session_state.blocks,
+                            st.session_state.adjacencies,
+                            time_limit=15
                         )
 
                         st.session_state.solution_found = success
@@ -576,210 +561,191 @@ with col1:
 
                         if success:
                             st.session_state.solution_grid = solution_grid
-                            st.success(
-                                f"✅ Solution found! All {len(st.session_state.blocks)} blocks placed successfully."
-                            )
-                            st.info(f"Total adjacencies in solution: {adj_count}")
+                            st.success(f"✅ Floor plan generated! All {len(st.session_state.blocks)} rooms placed successfully.")
+                            st.info(f"🔗 Total room connections: {adj_count}")
 
-                            # Count required adjacencies satisfied
-                            req_adj_satisfied = sum(
-                                1
-                                for adj in st.session_state.adjacencies
-                                if are_adjacent(solution_grid, adj[0], adj[1])
-                            )
-
-                            st.success(
-                                f"Required adjacencies satisfied: {req_adj_satisfied}/{len(st.session_state.adjacencies)}"
-                            )
+                            if st.session_state.adjacencies:
+                                req_adj_satisfied = sum(
+                                    1 for adj in st.session_state.adjacencies
+                                    if are_adjacent(solution_grid, adj[0], adj[1])
+                                )
+                                st.success(f"Required adjacencies satisfied: {req_adj_satisfied}/{len(st.session_state.adjacencies)}")
+                            else:
+                                st.success("🎯 Automatically maximized room connections for optimal layout!")
                         else:
-                            st.error(
-                                "❌ Could not find a solution. Try different block sizes or fewer adjacency constraints."
-                            )
+                            st.error("❌ Could not generate floor plan. Try adjusting room sizes or adjacency requirements.")
 
         # Reset button
         if st.button("Reset Everything"):
-            st.session_state.points = []
-            st.session_state.grid = None
-            st.session_state.area = None
-            st.session_state.is_closed = False
-            st.session_state.blocks = []
-            st.session_state.solution_grid = None
-            st.session_state.solution_found = False
-            st.session_state.placed_blocks = []
-            st.session_state.adjacencies = []
-            st.session_state.adjacency_count = 0
+            for key in ["points", "grid", "area", "is_closed", "blocks", "block_types", 
+                       "solution_grid", "solution_found", "placed_blocks", "adjacencies", "adjacency_count"]:
+                if key in st.session_state:
+                    if key in ["points", "blocks", "block_types", "placed_blocks", "adjacencies"]:
+                        st.session_state[key] = []
+                    elif key in ["solution_found", "is_closed"]:
+                        st.session_state[key] = False
+                    elif key == "adjacency_count":
+                        st.session_state[key] = 0
+                    else:
+                        st.session_state[key] = None
             st.rerun()
 
-# Visualization column
+# Visualization column (same as before but with improved performance)
 with col2:
-    st.subheader("Shape Visualization")
+    st.subheader("Floor Plan Visualization")
 
     # Create the figure and axis
-    fig, ax = plt.subplots(figsize=(10,10))
+    fig, ax = plt.subplots(figsize=(12, 12))
 
     # Set up the plot
     ax.set_xlim(-0.5, GRID_SIZE + 0.5)
     ax.set_ylim(-0.5, GRID_SIZE + 0.5)
     ax.set_xticks(range(GRID_SIZE + 1))
     ax.set_yticks(range(GRID_SIZE + 1))
-    ax.grid(True, linestyle="-", alpha=0.7)
+    ax.grid(True, linestyle="-", alpha=0.3)
     ax.set_axisbelow(True)
 
-    # Draw the shape
+    # Draw the house outline
     if len(st.session_state.points) > 0:
-        # Draw lines between points
         points_array = np.array(st.session_state.points)
-        ax.plot(points_array[:, 0], points_array[:, 1], "b-", linewidth=2)
+        ax.plot(points_array[:, 0], points_array[:, 1], "b-", linewidth=3, label="House Outline")
 
-        # Draw and label each point
         for i, (x, y) in enumerate(st.session_state.points):
-            ax.plot(x, y, "ro", markersize=8)
-            ax.text(x + 0.1, y + 0.1, f"({x},{y})", fontsize=9)
+            ax.plot(x, y, "bo", markersize=6)
+            ax.text(x + 0.2, y + 0.2, f"({x},{y})", fontsize=8)
 
-        # Shade the polygon if closed
         if st.session_state.is_closed and len(st.session_state.points) > 3:
-            # Create a polygon
-            polygon = Polygon(points_array[:-1], alpha=0.2, color="lightgray")
+            polygon = Polygon(points_array[:-1], alpha=0.1, color="lightblue", label="House Area")
             ax.add_patch(polygon)
 
     # Show solution if available
     if st.session_state.solution_found and st.session_state.solution_grid is not None:
         grid = st.session_state.solution_grid
-        # Use a colormap with more distinct colors
-        cmap = plt.cm.get_cmap("tab20", len(st.session_state.blocks))
 
-        # Draw filled blocks
+        # Draw filled rooms with appropriate colors
         for i in range(len(grid)):
             for j in range(len(grid[0])):
-                if grid[i][j] > 1:  # Block ID (+2)
-                    block_id = grid[i][j] - 2
-                    color = cmap(block_id)
+                if grid[i][j] > 1:  # Room ID (+2)
+                    room_id = grid[i][j] - 2
+                    room_info = st.session_state.block_types[room_id]
+                    room_type = room_info["type"]
+                    color = ROOM_TYPES[room_type]["color"]
+                    
                     ax.add_patch(
-                        Rectangle((j, GRID_SIZE - i), 1, 1, color=color, alpha=0.7)
-                    )
-                    ax.text(
-                        j + 0.5,
-                        GRID_SIZE - i + 0.5,
-                        str(block_id + 1),  # Display 1-based index
-                        ha="center",
-                        va="center",
-                        color="black",
-                        fontweight="bold",
+                        Rectangle((j, GRID_SIZE - i), 1, 1, color=color, alpha=0.8, 
+                                edgecolor='black', linewidth=0.5)
                     )
 
+        # Add room labels only at center points
+        for room_id in range(len(st.session_state.blocks)):
+            center = find_room_center(grid, room_id)
+            if center:
+                center_i, center_j = center
+                room_info = st.session_state.block_types[room_id]
+                room_type = room_info["type"]
+                label = ROOM_TYPES[room_type]["label"]
+                
+                # Add room label at center
+                ax.text(
+                    center_j + 0.5, GRID_SIZE - center_i + 0.5,
+                    f"{label}{room_id + 1}",
+                    ha="center", va="center",
+                    color="black", fontweight="bold", fontsize=10,
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.8)
+                )
+
         # Highlight adjacencies
-        if st.session_state.adjacencies and st.checkbox(
-            "Highlight Adjacencies", value=True
-        ):
-            # Find all pairs of adjacent cells from different blocks
+        if st.checkbox("Show Room Connections", value=True):
             for i in range(len(grid)):
                 for j in range(len(grid[0])):
-                    if grid[i][j] > 1:  # Found a block cell
-                        block_id = grid[i][j] - 2
-                        # Check all 4 directions
+                    if grid[i][j] > 1:
+                        room_id = grid[i][j] - 2
                         directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
                         for di, dj in directions:
                             ni, nj = i + di, j + dj
-                            if (
-                                0 <= ni < len(grid)
-                                and 0 <= nj < len(grid[0])
-                                and grid[ni][nj] > 1
-                                and grid[ni][nj] != grid[i][j]
-                            ):
-                                # Found an adjacency between different blocks
+                            if (0 <= ni < len(grid) and 0 <= nj < len(grid[0]) and 
+                                grid[ni][nj] > 1 and grid[ni][nj] != grid[i][j]):
+                                
                                 neighbor_id = grid[ni][nj] - 2
-                                # Only draw once per pair (when block_id < neighbor_id)
-                                if block_id < neighbor_id:
-                                    # Check if this is a required adjacency
-                                    is_required = (
-                                        block_id,
-                                        neighbor_id,
-                                    ) in st.session_state.adjacencies
-                                    # Draw a thicker line for required adjacencies
+                                if room_id < neighbor_id:
+                                    is_required = (room_id, neighbor_id) in st.session_state.adjacencies
                                     line_width = 4 if is_required else 2
-                                    line_style = "-" if is_required else "--"
-                                    line_color = "green" if is_required else "black"
+                                    line_color = "red" if is_required else "gray"
+                                    alpha = 0.8 if is_required else 0.4
 
-                                    # Calculate midpoints for the line
-                                    mid_i = (i + ni) / 2
-                                    mid_j = (j + nj) / 2
+                                    ax.plot(
+                                        [j + 0.5, nj + 0.5],
+                                        [GRID_SIZE - i + 0.5, GRID_SIZE - ni + 0.5],
+                                        "-", color=line_color, linewidth=line_width, alpha=alpha
+                                    )
 
-                                    # Draw line between block centers
-                                    if di == 0:  # Horizontal adjacency
-                                        ax.plot(
-                                            [j + 0.5, nj + 0.5],
-                                            [GRID_SIZE - i + 0.5, GRID_SIZE - ni + 0.5],
-                                            line_style,
-                                            color=line_color,
-                                            linewidth=line_width,
-                                        )
-                                    else:  # Vertical adjacency
-                                        ax.plot(
-                                            [j + 0.5, nj + 0.5],
-                                            [GRID_SIZE - i + 0.5, GRID_SIZE - ni + 0.5],
-                                            line_style,
-                                            color=line_color,
-                                            linewidth=line_width,
-                                        )
+    # Add legend for room types
+    if st.session_state.blocks:
+        legend_elements = []
+        for room_type, properties in ROOM_TYPES.items():
+            # Check if this room type is used
+            if any(block_info["type"] == room_type for block_info in st.session_state.block_types):
+                legend_elements.append(
+                    Rectangle((0, 0), 1, 1, facecolor=properties["color"], 
+                            alpha=0.8, label=f"{room_type} ({properties['label']})")
+                )
+        
+        if legend_elements:
+            ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1))
+
+    ax.set_title("House Floor Plan", fontsize=16, fontweight="bold")
+    ax.set_xlabel("X Coordinate", fontsize=12)
+    ax.set_ylabel("Y Coordinate", fontsize=12)
 
     # Display the plot
     st.pyplot(fig)
 
-    # Display grid for debugging
-    if st.session_state.grid is not None and st.checkbox("Show Grid Representation"):
-        st.write("Grid representation of shape (1 = inside shape, 0 = outside):")
-        grid_df = pd.DataFrame(st.session_state.grid)
-        st.dataframe(grid_df)
-
-    # Display adjacency matrix if solution found
-    if st.session_state.solution_found and st.session_state.placed_blocks:
-        if st.checkbox("Show Adjacency Matrix"):
-            st.subheader("Block Adjacency Matrix")
-
-            # Create adjacency matrix
-            num_blocks = len(st.session_state.blocks)
-            adj_matrix = [[0 for _ in range(num_blocks)] for _ in range(num_blocks)]
-
-            # Fill adjacency matrix
-            for i in range(num_blocks):
-                for j in range(i + 1, num_blocks):
-                    if are_adjacent(st.session_state.solution_grid, i, j):
-                        adj_matrix[i][j] = adj_matrix[j][i] = 1
-
-            # Convert to DataFrame for better display
-            adj_df = pd.DataFrame(
-                adj_matrix,
-                index=[f"Block {i+1}" for i in range(num_blocks)],
-                columns=[f"Block {i+1}" for i in range(num_blocks)],
-            )
-            st.dataframe(adj_df)
+    # Display room summary
+    if st.session_state.blocks:
+        st.subheader("🏠 Room Summary")
+        room_summary = {}
+        for room_info in st.session_state.block_types:
+            room_type = room_info["type"]
+            if room_type in room_summary:
+                room_summary[room_type] += 1
+            else:
+                room_summary[room_type] = 1
+        
+        for room_type, count in room_summary.items():
+            label = ROOM_TYPES[room_type]["label"]
+            st.write(f"**{room_type} ({label})**: {count} room(s)")
 
     # Display placement details if solution found
     if st.session_state.solution_found and st.session_state.placed_blocks:
-        st.subheader("Block Placement Details")
-        for block_id, row, col, rot_idx, _ in st.session_state.placed_blocks:
-            actual_block = st.session_state.blocks[block_id]
-            st.write(
-                f"Block {block_id+1} ({len(actual_block)}x{len(actual_block[0])}) placed at position ({col},{GRID_SIZE-row}) with rotation {rot_idx*90}°"
-            )
+        if st.checkbox("Show Room Placement Details"):
+            st.subheader("Room Placement Details")
+            for room_id, row, col, rot_idx, _ in st.session_state.placed_blocks:
+                room_info = st.session_state.block_types[room_id]
+                room_type = room_info["type"]
+                room_shape = room_info["shape"]
+                dimensions = room_info["dimensions"]
+                label = ROOM_TYPES[room_type]["label"]
+                
+                st.write(f"**{room_type} {room_id+1} ({label}{room_id+1})** ({room_shape}) - "
+                        f"Size: {dimensions[0]}x{dimensions[1]} - "
+                        f"Position: ({col},{GRID_SIZE-row}) - "
+                        f"Rotation: {rot_idx*90}°")
 
-    # IMPROVEMENT: Add performance metrics
-    if st.session_state.solution_found and st.checkbox("Show Performance Metrics"):
-        st.subheader("Solver Performance")
-        
-        # Display a simple comparison of time complexity
-        complexity_df = pd.DataFrame({
-            "Algorithm": ["Random Search", "Backtracking", "Priority-based"],
-            "Typical Time": ["O(n!)", "O(4^n)", "O(4^n) but faster on average"],
-            "Effectiveness": ["Low", "Medium", "High"],
-            "Best For": ["Simple shapes", "Medium complexity", "Complex constraints"]
-        })
-        st.table(complexity_df)
-        
-        st.write("""
-        **Performance Insights:**
-        - Larger blocks are placed first to reduce search space
-        - Priority placed on corners and edges for better fit
-        - Constraint checking is done early to avoid dead ends
-        - Two-phase approach combines thoroughness with speed
-        """)
+    # Display adjacency matrix if solution found
+    if st.session_state.solution_found and st.session_state.placed_blocks:
+        if st.checkbox("Show Room Adjacency Matrix"):
+            st.subheader("Room Adjacency Matrix")
+
+            num_rooms = len(st.session_state.blocks)
+            adj_matrix = [[0 for _ in range(num_rooms)] for _ in range(num_rooms)]
+
+            for i in range(num_rooms):
+                for j in range(i + 1, num_rooms):
+                    if are_adjacent(st.session_state.solution_grid, i, j):
+                        adj_matrix[i][j] = adj_matrix[j][i] = 1
+
+            room_labels = [f"{st.session_state.block_types[i]['type']} {i+1}" 
+                          for i in range(num_rooms)]
+            
+            adj_df = pd.DataFrame(adj_matrix, index=room_labels, columns=room_labels)
+            st.dataframe(adj_df)
